@@ -2,8 +2,9 @@ import time
 from math import cos, radians, sin
 
 from demosys.opengl.projection import Projection
-from pyrr import Vector3, matrix44, vector, vector3
-from pyrr.quaternion import create_from_eulers, apply_to_vector
+from pyrr import Vector3, matrix33, matrix44, vector, vector3, Quaternion
+from pyrr.vector import length, squared_length
+from pyrr.quaternion import create_from_eulers, apply_to_vector, create_from_axis_rotation, create_from_matrix, inverse
 
 from typing import Tuple
 
@@ -19,6 +20,119 @@ DOWN = 6
 STILL = 0
 POSITIVE = 1
 NEGATIVE = 2
+
+
+def inverse_rotate(q: Quaternion, v: Vector3) -> Vector3:
+    """Returns the image of \p v by the Quaternion inverse() rotation.
+        rotate() performs an inverse transformation. Same as inverse().rotate(v).
+
+    :param q:
+    :param v:
+    :return:
+    """
+    return apply_to_vector(inverse(q), v)
+
+
+def creative_modelview_from_position_orientation(position: Vector3, orientation: Quaternion) -> matrix44:
+    """
+
+    :param position:
+    :param orientation:
+    :return:
+    """
+    q = orientation
+
+    q00 = 2.0 * q[0] * q[0]
+    q11 = 2.0 * q[1] * q[1]
+    q22 = 2.0 * q[2] * q[2]
+
+    q01 = 2.0 * q[0] * q[1]
+    q02 = 2.0 * q[0] * q[2]
+    q03 = 2.0 * q[0] * q[3]
+
+    q12 = 2.0 * q[1] * q[2]
+    q13 = 2.0 * q[1] * q[3]
+
+    q23 = 2.0 * q[2] * q[3]
+
+    model_view_matrix = matrix44.create_identity()
+    model_view_matrix[0][0] = 1.0 - q11 - q22
+    model_view_matrix[0][1] = q01 - q23
+    model_view_matrix[0][2] = q02 + q13
+    model_view_matrix[0][3] = 0.0
+
+    model_view_matrix[1][0] = q01 + q23
+    model_view_matrix[1][1] = 1.0 - q22 - q00
+    model_view_matrix[1][2] = q12 - q03
+    model_view_matrix[1][3] = 0.0
+
+    model_view_matrix[2][0] = q02 - q13
+    model_view_matrix[2][1] = q12 + q03
+    model_view_matrix[2][2] = 1.0 - q11 - q00
+    model_view_matrix[2][3] = 0.0
+
+    t = inverse_rotate(q, position)
+    model_view_matrix[3][0] = -t[0]
+    model_view_matrix[3][1] = -t[1]
+    model_view_matrix[3][2] = -t[2]
+    model_view_matrix[3][3] = 1.0
+
+    return model_view_matrix
+
+
+def create_from_view_direction(direction: Vector3, up: vector3=Vector3([0, 1, 0])) -> Quaternion:
+    """Rotates the Camera so that its viewDirection() is \p direction (defined in
+     the world coordinate system).
+     The Camera position() is not modified. The Camera is rotated so that the
+     horizon (defined by its upVector()) is preserved. See also lookAt() and
+     setUpVector().
+
+    :param direction:
+    :param up
+    :return:
+    """
+    if squared_length(direction) < 1e-10:
+        raise ValueError("len2(direction)(={squared_length(direction)}) < 1e-10")
+
+    xAxis = direction.cross(up)
+    if squared_length(xAxis) < 1e-10:
+        # TODO: [QGLViewer] Find equivalence !
+        """
+        // target is aligned with upVector, this means a rotation around X axis
+        // X axis is then unchanged, let's keep it !
+        xAxis = frame()->inverseTransformOf(Vec(1.0, 0.0, 0.0));
+        """
+        raise RuntimeError
+
+    return create_from_rotated_basis(xAxis, xAxis.cross(direction), direction * -1)
+
+
+def create_from_rotated_basis(x: Vector3, y: Vector3, z: Vector3) -> Quaternion:
+    """Return a Quaternion from a (supposedly correct) 3x3 rotation matrix.
+      The matrix is expressed in European format: its three \e columns are the
+      images by the rotation of the three vectors of an orthogonal basis. Note that
+      OpenGL uses a symmetric representation for its matrices.
+      create_from_rotated_basis() return a Quaternion from the three axis of a rotated
+      frame. It actually fills the three columns of a matrix with these rotated
+      basis vectors and calls this method.
+
+    :param x:
+    :param y:
+    :param z:
+    :return:
+    """
+    m = matrix33.create_identity()
+
+    norm_x = length(x)
+    norm_y = length(y)
+    norm_z = length(z)
+
+    for i in range(3):
+        m[i][0] = x[i] / norm_x
+        m[i][1] = y[i] / norm_y
+        m[i][2] = z[i] / norm_z
+
+    return create_from_matrix(m)
 
 
 class Camera:
@@ -147,9 +261,10 @@ class CameraQuaternion(Camera):
 
         # Eulers: +Roll
         self.roll = 0.0
+        # self.yall = 0.0
 
         # Orientation: quaternion
-        self.orientation = create_from_eulers((self.pitch, self.yaw, self.roll))
+        self.orientation = create_from_eulers((self.roll, self.pitch, self.yaw))
 
     @property
     def eulers(self) -> Tuple[float, float, float]:
@@ -161,62 +276,9 @@ class CameraQuaternion(Camera):
         """
         self.orientation = create_from_eulers(self.eulers)
 
-        self.dir = vector.normalise(apply_to_vector(self.orientation, Vector3([0.0, 0.0, -1.0])))
-        self.right = vector.normalise(apply_to_vector(self.orientation, Vector3([1.0, 0.0,  0.0])))
-        self.up = vector.normalise(apply_to_vector(self.orientation, self._up))
 
-    # @property
-    # def view_matrix(self):
-    #     """
-    #
-    #     :return: The current view matrix for the camera
-    #     """
-    #     self._update_yaw_and_pitch()
-    #
-    #     # https://github.com/GillesDebunne/libQGLViewer/blob/master/QGLViewer/camera.cpp#L383
-    #     q = self.orientation
-    #
-    #     q00 = 2.0 * q[0] * q[0]
-    #     q11 = 2.0 * q[1] * q[1]
-    #     q22 = 2.0 * q[2] * q[2]
-    #     q01 = 2.0 * q[0] * q[1]
-    #     q02 = 2.0 * q[0] * q[2]
-    #     q03 = 2.0 * q[0] * q[3]
-    #     q12 = 2.0 * q[1] * q[2]
-    #     q13 = 2.0 * q[1] * q[3]
-    #     q23 = 2.0 * q[2] * q[3]
-    #
-    #     modelview_matrix = matrix44.create_identity()
-    #
-    #     modelview_matrix[0] = 1.0 - q11 - q22
-    #     modelview_matrix[1] = q01 - q23
-    #     modelview_matrix[2] = q02 + q13
-    #     modelview_matrix[3] = 0.0
-    #
-    #     modelview_matrix[4] = q01 + q23
-    #     modelview_matrix[5] = 1.0 - q22 - q00
-    #     modelview_matrix[6] = q12 - q03
-    #     modelview_matrix[7] = 0.0
-    #
-    #     modelview_matrix[8] = q02 - q13
-    #     modelview_matrix[9] = q12 + q03
-    #     modelview_matrix[10] = 1.0 - q11 - q00
-    #     modelview_matrix[11] = 0.0
-    #
-    #     # https://github.com/GillesDebunne/libQGLViewer/blob/master/QGLViewer/quaternion.cpp#L51
-    #     # https://github.com/GillesDebunne/libQGLViewer/blob/master/QGLViewer/quaternion.h#L197
-    #     t = apply_to_vector(q.inverse(), self.position)
-    #
-    #     modelview_matrix[12] = -t.x
-    #     modelview_matrix[13] = -t.y
-    #     modelview_matrix[14] = -t.z
-    #     modelview_matrix[15] = 1.0
-    #
-    #     return modelview_matrix
-
-
-class SystemCamera(CameraQuaternion):
 # class SystemCamera(Camera):
+class SystemCamera(CameraQuaternion):
     """System camera controlled by mouse and keyboard"""
     def __init__(self, fov=60, aspect=1.0, near=1, far=100):
         # Position movement states
@@ -293,13 +355,13 @@ class SystemCamera(CameraQuaternion):
         x_offset *= self.mouse_sensitivity
         y_offset *= self.mouse_sensitivity
 
-        self.yaw -= x_offset
-        self.pitch += y_offset
+        self.yaw -= y_offset
+        self.pitch -= x_offset
 
-        if self.pitch > 85.0:
-            self.pitch = 85.0
-        if self.pitch < -85.0:
-            self.pitch = -85.0
+        # if self.pitch > 85.0:
+        #     self.pitch = 85.0
+        # if self.pitch < -85.0:
+        #     self.pitch = -85.0
 
         self._update_yaw_and_pitch()
 
@@ -333,4 +395,9 @@ class SystemCamera(CameraQuaternion):
         elif self._ydir == NEGATIVE:
             self.position -= self.up * self.velocity * t
 
-        return self._gl_look_at(self.position, self.position + self.dir, self._up)
+        # return self._gl_look_at(self.position, self.position + self.dir, self._up)
+        try:
+            return creative_modelview_from_position_orientation(self.position, self.orientation)
+            # return matrix44.create_from_translation(self.position)
+        except Exception as e:
+            print(f"Exception: {e}")
