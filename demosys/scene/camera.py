@@ -3,6 +3,9 @@ from math import cos, radians, sin
 
 from demosys.opengl.projection import Projection
 from pyrr import Vector3, matrix44, vector, vector3
+from pyrr.quaternion import create_from_eulers, apply_to_vector
+
+from typing import Tuple
 
 # Direction Definitions
 RIGHT = 1
@@ -122,7 +125,98 @@ class Camera:
         return matrix44.multiply(translate, rotate)
 
 
-class SystemCamera(Camera):
+class CameraQuaternion(Camera):
+    """
+    void Camera::setViewDirection(const Vec &direction)
+    https://github.com/GillesDebunne/libQGLViewer/blob/master/QGLViewer/camera.cpp#L1151
+
+
+    https://github.com/GillesDebunne/libQGLViewer/blob/master/QGLViewer/quaternion.cpp#L136
+    """
+
+    def __init__(self, fov=60, aspect=1.0, near=1, far=100):
+        """
+        Initialize camera using a specific projection
+
+        :param fov: Field of view
+        :param aspect: Aspect ratio
+        :param near: Near plane
+        :param far: Far plane
+        """
+        super().__init__(fov=fov, aspect=aspect, near=near, far=far)
+
+        # Eulers: +Roll
+        self.roll = 0.0
+
+        # Orientation: quaternion
+        self.orientation = create_from_eulers((self.pitch, self.yaw, self.roll))
+
+    @property
+    def eulers(self) -> Tuple[float, float, float]:
+        return self.yaw, self.pitch, self.roll
+
+    def _update_yaw_and_pitch(self):
+        """
+        Updates the camera vectors based on the current yaw and pitch
+        """
+        self.orientation = create_from_eulers(self.eulers)
+
+        self.dir = vector.normalise(apply_to_vector(self.orientation, Vector3([0.0, 0.0, -1.0])))
+        self.right = vector.normalise(apply_to_vector(self.orientation, Vector3([1.0, 0.0,  0.0])))
+        self.up = vector.normalise(apply_to_vector(self.orientation, self._up))
+
+    # @property
+    # def view_matrix(self):
+    #     """
+    #
+    #     :return: The current view matrix for the camera
+    #     """
+    #     self._update_yaw_and_pitch()
+    #
+    #     # https://github.com/GillesDebunne/libQGLViewer/blob/master/QGLViewer/camera.cpp#L383
+    #     q = self.orientation
+    #
+    #     q00 = 2.0 * q[0] * q[0]
+    #     q11 = 2.0 * q[1] * q[1]
+    #     q22 = 2.0 * q[2] * q[2]
+    #     q01 = 2.0 * q[0] * q[1]
+    #     q02 = 2.0 * q[0] * q[2]
+    #     q03 = 2.0 * q[0] * q[3]
+    #     q12 = 2.0 * q[1] * q[2]
+    #     q13 = 2.0 * q[1] * q[3]
+    #     q23 = 2.0 * q[2] * q[3]
+    #
+    #     modelview_matrix = matrix44.create_identity()
+    #
+    #     modelview_matrix[0] = 1.0 - q11 - q22
+    #     modelview_matrix[1] = q01 - q23
+    #     modelview_matrix[2] = q02 + q13
+    #     modelview_matrix[3] = 0.0
+    #
+    #     modelview_matrix[4] = q01 + q23
+    #     modelview_matrix[5] = 1.0 - q22 - q00
+    #     modelview_matrix[6] = q12 - q03
+    #     modelview_matrix[7] = 0.0
+    #
+    #     modelview_matrix[8] = q02 - q13
+    #     modelview_matrix[9] = q12 + q03
+    #     modelview_matrix[10] = 1.0 - q11 - q00
+    #     modelview_matrix[11] = 0.0
+    #
+    #     # https://github.com/GillesDebunne/libQGLViewer/blob/master/QGLViewer/quaternion.cpp#L51
+    #     # https://github.com/GillesDebunne/libQGLViewer/blob/master/QGLViewer/quaternion.h#L197
+    #     t = apply_to_vector(q.inverse(), self.position)
+    #
+    #     modelview_matrix[12] = -t.x
+    #     modelview_matrix[13] = -t.y
+    #     modelview_matrix[14] = -t.z
+    #     modelview_matrix[15] = 1.0
+    #
+    #     return modelview_matrix
+
+
+class SystemCamera(CameraQuaternion):
+# class SystemCamera(Camera):
     """System camera controlled by mouse and keyboard"""
     def __init__(self, fov=60, aspect=1.0, near=1, far=100):
         # Position movement states
@@ -134,6 +228,7 @@ class SystemCamera(Camera):
         # Velocity in axis units per second
         self.velocity = 10.0
         self.mouse_sensitivity = 0.5
+        self.mouse_sensitivity *= 0.01
         self.last_x = None
         self.last_y = None
 
